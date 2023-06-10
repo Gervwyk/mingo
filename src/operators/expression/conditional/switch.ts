@@ -4,6 +4,7 @@
 
 import { computeValue, Options } from "../../../core";
 import { AnyVal, RawObject } from "../../../types";
+import { truthy } from "../../../util";
 
 /**
  * An operator that evaluates a series of case expressions. When it finds an expression which
@@ -16,14 +17,17 @@ import { AnyVal, RawObject } from "../../../types";
 export function $switch(
   obj: RawObject,
   expr: { branches: Array<{ case: AnyVal; then: AnyVal }>; default: AnyVal },
-  options?: Options
+  options: Options
 ): AnyVal {
   let thenExpr = null;
   // Array.prototype.find not supported in IE, hence the '.some()' proxy
   expr.branches.some((b: { case: AnyVal; then: AnyVal }) => {
-    const found = computeValue(obj, b.case, null, options);
-    if (found === true) thenExpr = b.then;
-    return found;
+    const condition = truthy(
+      computeValue(obj, b.case, null, options),
+      options.useStrictMode
+    );
+    if (condition) thenExpr = b.then;
+    return condition;
   });
 
   return computeValue(

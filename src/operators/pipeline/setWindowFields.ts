@@ -5,16 +5,42 @@ import {
   getOperator,
   OperatorType,
   Options,
-  WindowOperator,
+  WindowOperator
 } from "../../core";
 import { compose, Iterator, Lazy } from "../../lazy";
-import { AnyVal, RawArray, RawObject } from "../../types";
+import { AnyVal, Callback, RawArray, RawObject } from "../../types";
 import { assert, isNumber, isOperator, isString } from "../../util";
 import { $dateAdd } from "../expression/date/dateAdd";
-import { SetWindowFieldsInput, WindowOutputOption } from "./_internal";
+import {
+  Boundary,
+  isUnbounded,
+  SetWindowFieldsInput,
+  WindowOutputOption
+} from "./_internal";
 import { $addFields } from "./addFields";
 import { $group } from "./group";
 import { $sort } from "./sort";
+
+// Operators that require 'sortBy' option.
+const SORT_REQUIRED_OPS = new Set([
+  "$denseRank",
+  "$documentNumber",
+  "$first",
+  "$last",
+  "$linearFill",
+  "$rank",
+  "$shift"
+]);
+
+// Operators that require unbounded 'window' option.
+const WINDOW_UNBOUNDED_OPS = new Set([
+  "$denseRank",
+  "$expMovingAvg",
+  "$linearFill",
+  "$locf",
+  "$rank",
+  "$shift"
+]);
 
 /**
  * Randomly selects the specified number of documents from its input. The given iterator must have finite values
@@ -27,7 +53,7 @@ import { $sort } from "./sort";
 export function $setWindowFields(
   collection: Iterator,
   expr: SetWindowFieldsInput,
-  options?: Options
+  options: Options
 ): Iterator {
   // validate inputs early since this can be an expensive operation.
   for (const outputExpr of Object.values(expr.output)) {
@@ -36,14 +62,14 @@ export function $setWindowFields(
     assert(
       !!getOperator(OperatorType.WINDOW, op) ||
         !!getOperator(OperatorType.ACCUMULATOR, op),
-      `${op} is not a valid window operator`
+      `'${op}' is not a valid window operator`
     );
 
     assert(
       keys.length > 0 &&
         keys.length <= 2 &&
         (keys.length == 1 || keys.includes("window")),
-      "$setWindowFields 'output' values should have a single window operator."
+      "'output' option should have a single window operator."
     );
 
     if (outputExpr?.window) {
@@ -52,7 +78,7 @@ export function $setWindowFields(
         (!!documents && !range) ||
           (!documents && !!range) ||
           (!documents && !range),
-        "$setWindowFields 'output.window' option supports only one of 'documents' or 'range'."
+        "'window' option supports only one of 'documents' or 'range'."
       );
     }
   }
@@ -63,27 +89,17 @@ export function $setWindowFields(
   }
 
   // then partition collection
-  if (expr.partitionBy) {
-    collection = $group(
-      collection,
-      {
-        _id: expr.partitionBy,
-        items: { $push: "$$CURRENT" },
-      },
-      options
-    );
-  } else {
-    // single partition so we can keep the code uniform
-    collection = Lazy([
-      {
-        _id: 0,
-        items: collection.value(),
-      },
-    ]);
-  }
+  collection = $group(
+    collection,
+    {
+      _id: expr.partitionBy,
+      items: { $push: "$$CURRENT" }
+    },
+    options
+  );
 
   // transform values
-  return collection.transform((partitions: RawArray) => {
+  return collection.transform(((partitions: RawArray) => {
     // let iteratorIndex = 0;
     const iterators: Iterator[] = [];
     const outputConfig: Array<{
@@ -98,21 +114,34 @@ export function $setWindowFields(
     }> = [];
 
     for (const [field, outputExpr] of Object.entries(expr.output)) {
-      const operatorName = Object.keys(outputExpr).find(isOperator);
-      outputConfig.push({
-        operatorName,
+      const op = Object.keys(outputExpr).find(isOperator);
+      const config = {
+        operatorName: op,
         func: {
-          left: getOperator(OperatorType.ACCUMULATOR, operatorName),
-          right: getOperator(OperatorType.WINDOW, operatorName),
+          left: getOperator(OperatorType.ACCUMULATOR, op),
+          right: getOperator(OperatorType.WINDOW, op)
         },
-        args: outputExpr[operatorName],
+        args: outputExpr[op],
         field: field,
-        window: outputExpr.window,
-      });
+        window: outputExpr.window
+      };
+      // sortBy option required for specific operators or bounded window.
+      assert(
+        !!expr.sortBy || !(SORT_REQUIRED_OPS.has(op) || !config.window),
+        `${
+          SORT_REQUIRED_OPS.has(op) ? `'${op}'` : "bounded window operation"
+        } requires a sortBy.`
+      );
+      // window must be unbounded for specific operators.
+      assert(
+        !config.window || !WINDOW_UNBOUNDED_OPS.has(op),
+        `${op} does not accept a 'window' field.`
+      );
+      outputConfig.push(config);
     }
 
     // each parition maintains its own closure to process the documents in the window.
-    partitions.forEach((group: { items: RawArray }) => {
+    partitions.forEach(((group: { items: RawArray }) => {
       // get the items to process
       const items = group.items as RawObject[];
 
@@ -136,31 +165,36 @@ export function $setWindowFields(
             // process accumulator function
             if (func.left) {
               return func.left(getItemsFn(obj, index), args, options);
+            } else if (func.right) {
+              // OR process 'window' function
+              return func.right(
+                obj,
+                getItemsFn(obj, index),
+                {
+                  parentExpr: expr,
+                  inputExpr: args,
+                  documentNumber: index + 1,
+                  field
+                },
+                // must use raw options only since it operates over a collection.
+                options
+              );
             }
-
-            // OR process 'window' function
-            return func.right(
-              obj,
-              getItemsFn(obj, index),
-              {
-                parentExpr: expr,
-                inputExpr: args,
-                documentNumber: index + 1,
-                field,
-              },
-              // must use raw options only since it operates over a collection.
-              options
-            );
           };
         };
 
         if (window) {
           const { documents, range, unit } = window;
+          // TODO: fix the meaning of numeric values in range.
+          //  See definition: https://www.mongodb.com/docs/manual/reference/operator/aggregation/setWindowFields/#std-label-setWindowFields-range
+          //  - A number to add to the value of the sortBy field for the current document.
+          //  - A document is in the window if the sortBy field value is inclusively within the lower and upper boundaries.
+          // TODO: Need to reconcile the two above statments from the doc to implement 'range' option correctly.
           const boundary = documents || range;
-          const begin = boundary[0];
-          const end = boundary[1];
 
-          if (boundary && (begin != "unbounded" || end != "unbounded")) {
+          if (!isUnbounded(window)) {
+            const [begin, end] = boundary as Boundary[];
+
             const toBeginIndex = (currentIndex: number): number => {
               if (begin == "current") return currentIndex;
               if (begin == "unbounded") return 0;
@@ -191,11 +225,15 @@ export function $setWindowFields(
                 // we are dealing with datetimes
                 const getTime = (amount: number): number => {
                   return (
-                    $dateAdd(current, {
-                      startDate: new Date(current[sortKey] as Date),
-                      unit,
-                      amount,
-                    }) as Date
+                    $dateAdd(
+                      current,
+                      {
+                        startDate: new Date(current[sortKey] as Date),
+                        unit,
+                        amount
+                      },
+                      options
+                    ) as Date
                   ).getTime();
                 };
                 lower = isNumber(begin) ? getTime(begin) : -Infinity;
@@ -212,7 +250,7 @@ export function $setWindowFields(
 
               // look within the boundary and filter down
               return array.filter((o: RawObject) => {
-                const value = o[sortKey];
+                const value = o[sortKey] as number;
                 const n = +value;
                 return n >= lower && n <= upper;
               });
@@ -224,7 +262,7 @@ export function $setWindowFields(
 
         // default action is to utilize the entire set of items
         if (!windowResultMap[field]) {
-          windowResultMap[field] = makeResultFunc((_) => items);
+          windowResultMap[field] = makeResultFunc(_ => items);
         }
 
         // invoke add fields to get the desired behaviour using a custom function.
@@ -234,9 +272,9 @@ export function $setWindowFields(
             [field]: {
               $function: {
                 body: (obj: RawObject) => windowResultMap[field](obj),
-                args: ["$$CURRENT"],
-              },
-            },
+                args: ["$$CURRENT"]
+              }
+            }
           },
           options
         );
@@ -244,8 +282,8 @@ export function $setWindowFields(
 
       // add to iterator list
       iterators.push(iterator);
-    });
+    }) as Callback);
 
     return compose(...iterators);
-  });
+  }) as Callback<Iterator>);
 }

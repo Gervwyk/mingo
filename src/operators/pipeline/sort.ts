@@ -2,14 +2,13 @@ import { CollationSpec, Options } from "../../core";
 import { Iterator } from "../../lazy";
 import { AnyVal, Comparator, RawArray, RawObject } from "../../types";
 import {
-  DEFAULT_COMPARATOR,
+  compare,
   groupBy,
   into,
   isEmpty,
   isObject,
   isString,
-  resolve,
-  sortBy,
+  resolve
 } from "../../util";
 
 /**
@@ -23,11 +22,11 @@ import {
 export function $sort(
   collection: Iterator,
   sortKeys: Record<string, 1 | -1>,
-  options?: Options
+  options: Options
 ): Iterator {
   if (isEmpty(sortKeys) || !isObject(sortKeys)) return collection;
 
-  let cmp = DEFAULT_COMPARATOR;
+  let cmp = compare;
   // check for collation spec on the options
   const collationSpec = options.collation;
 
@@ -38,31 +37,22 @@ export function $sort(
 
   return collection.transform((coll: RawArray) => {
     const modifiers = Object.keys(sortKeys);
-
     for (const key of modifiers.reverse()) {
-      const grouped = groupBy(
+      const groups = groupBy(
         coll,
         (obj: RawObject) => resolve(obj, key),
-        options?.hashFunction
+        options.hashFunction
       );
-      const sortedIndex: Record<string, number> = {};
+      const sortedKeys = Array.from(groups.keys()).sort(cmp);
+      if (sortKeys[key] === -1) sortedKeys.reverse();
 
-      const indexKeys = sortBy(
-        grouped.keys,
-        (k: string, i: number) => {
-          sortedIndex[k] = i;
-          return k;
-        },
-        cmp
-      );
-
-      if (sortKeys[key] === -1) indexKeys.reverse();
+      // reuse collection so the data is available for the next iteration of the sort modifiers.
       coll = [];
-      for (const k of indexKeys) {
-        into(coll, grouped.groups[sortedIndex[k as string]]);
-      }
+      sortedKeys.reduce(
+        (acc: RawArray, key: AnyVal) => into(acc, groups.get(key)),
+        coll
+      );
     }
-
     return coll;
   });
 }
@@ -77,7 +67,7 @@ const COLLATION_STRENGTH: Record<number, string> = {
   2: "accent",
   // Strings that differ in base letters, accents and other diacritic marks, or case compare as unequal.
   // Other differences may also be taken into consideration. Examples: a ≠ b, a ≠ á, a ≠ A
-  3: "variant",
+  3: "variant"
   // case - Only strings that differ in base letters or case compare as unequal. Examples: a ≠ b, a = á, a ≠ A.
 };
 
@@ -101,7 +91,7 @@ function collationComparator(spec: CollationSpec): Comparator<AnyVal> {
     sensitivity: COLLATION_STRENGTH[spec.strength || 3],
     caseFirst: spec.caseFirst === "off" ? "false" : spec.caseFirst || "false",
     numeric: spec.numericOrdering || false,
-    ignorePunctuation: spec.alternate === "shifted",
+    ignorePunctuation: spec.alternate === "shifted"
   };
 
   // when caseLevel is true for strength  1:base and 2:accent, bump sensitivity to the nearest that supports case comparison
@@ -114,7 +104,7 @@ function collationComparator(spec: CollationSpec): Comparator<AnyVal> {
 
   return (a: AnyVal, b: AnyVal) => {
     // non strings
-    if (!isString(a) || !isString(b)) return DEFAULT_COMPARATOR(a, b);
+    if (!isString(a) || !isString(b)) return compare(a, b);
 
     // only for strings
     const i = collator.compare(a, b);

@@ -6,18 +6,20 @@ import {
   HashFunction,
   Predicate,
   RawArray,
-  RawObject,
+  RawObject
 } from "./types";
 import {
   assert,
   has,
   into,
+  isArray,
+  isFunction,
   isNil,
   isObject,
   isObjectLike,
   isOperator,
   isString,
-  resolve,
+  resolve
 } from "./util";
 
 /**
@@ -74,41 +76,33 @@ export enum ProcessingMode {
   /**
    * Turn off cloning and modifies the input collection as needed.
    * This option will also return output objects with shared paths in their graph when specific operators are used.
-   *
-   * This option provides the greatest speedup for the biggest tradeoff. When using the aggregation pipeline, you can use
-   * the "$out" operator to collect immutable intermediate results.
+   * This option provides the greatest speedup for the biggest tradeoff.
+   * When using the aggregation pipeline, you can use the "$out" operator to collect immutable intermediate results.
    *
    * @default
    */
-  CLONE_OFF = "CLONE_OFF",
+  CLONE_OFF = "CLONE_OFF"
 }
 
 /**
  * Generic options interface passed down to all operators
  */
 export interface Options {
-  /** The key that is used to lookup the ID value of a document. @default "_id" */
-  readonly idKey?: string;
+  /** The key that is used to lookup the ID value of a document. @default "_id". */
+  readonly idKey: string;
   /** The collation specification for string sorting operations. */
   readonly collation?: CollationSpec;
-  /** Determines how to treat inputs and outputs. @default ProcessingMode.CLONE_OFF */
-  readonly processingMode?: ProcessingMode;
-  /**
-   * Enforces strict MongoDB compatibilty. See readme for differences. @default true.
-   * When disabled, the $elemMatch projection operator returns all matching nested documents instead of only the first.
-   */
-  readonly useStrictMode?: boolean;
-  /**
-   * Enables or disables custom script execution.
-   * When disabled, you cannot use operations that execute custom code, such as the $where, $accumulator, and $function.
-   * @default true
-   */
-  readonly scriptEnabled?: boolean;
-  /** Hash function to replace the somewhat weaker default implementation. */
+  /** Determines how to treat inputs and outputs. @default ProcessingMode.CLONE_OFF. */
+  readonly processingMode: ProcessingMode;
+  /** Enforces strict MongoDB compatibilty. See README. @default true. */
+  readonly useStrictMode: boolean;
+  /** Enable or disable custom script execution via $where, $accumulator, and $function operators. @default true. */
+  readonly scriptEnabled: boolean;
+  /** Hash function to replace the Effective Java default implementation. */
   readonly hashFunction?: HashFunction;
   /** Function to resolve strings to arrays for use with operators that reference other collections such as; `$lookup`, `$out` and `$merge`. */
   readonly collectionResolver?: CollectionResolver;
-  /** JSON schema validator to use with the '$jsonSchema' operator. This is required in order to use the operator. */
+  /** JSON schema validator to use with the '$jsonSchema' operator. Required in order to use the operator. */
   readonly jsonSchemaValidator?: JsonSchemaValidator;
   /** Global variables. */
   readonly variables?: Readonly<RawObject>;
@@ -124,9 +118,9 @@ interface LocalData {
 /** Custom type to facilitate type checking for global options */
 export class ComputeOptions implements Options {
   private constructor(
-    readonly options?: Options,
+    readonly options: Options,
     /** Reference to the root object when processing subgraphs of the object. */
-    private _root?: AnyVal,
+    private _root: AnyVal,
     private _local?: LocalData,
     /** The current time in milliseconds. Remains the same throughout all stages of the aggregation pipeline. */
     readonly timestamp = Date.now()
@@ -151,7 +145,7 @@ export class ComputeOptions implements Options {
       ? options.update(
           // value can be '0' or 'false'
           isNil(options.root) ? root : options.root,
-          Object.assign({}, options.local, local)
+          Object.assign({}, options.local, local || {})
         )
       : new ComputeOptions(options || initOptions(), root, local);
   }
@@ -160,7 +154,12 @@ export class ComputeOptions implements Options {
   update(root?: AnyVal, local?: LocalData): ComputeOptions {
     // NOTE: this is done for efficiency to avoid creating too many intermediate options objects.
     this._root = root;
-    this._local = local;
+    this._local = local
+      ? Object.assign({}, local, {
+          variables: Object.assign({}, this._local?.variables, local?.variables)
+        })
+      : local;
+
     return this;
   }
 
@@ -171,7 +170,7 @@ export class ComputeOptions implements Options {
     return this._local;
   }
   get idKey() {
-    return this.options?.idKey;
+    return this.options.idKey;
   }
   get collation() {
     return this.options?.collation;
@@ -200,17 +199,32 @@ export class ComputeOptions implements Options {
 }
 
 /**
- * Creates an Option from another required keys are initialized
+ * Creates an Option from another where required keys are initialized.
  * @param options Options
  */
-export function initOptions(options?: Options): Options {
+export function initOptions(options?: Partial<Options>): Options {
   return Object.freeze({
     idKey: "_id",
     scriptEnabled: true,
     useStrictMode: true,
     processingMode: ProcessingMode.CLONE_OFF,
-    ...options,
+    ...options
   });
+}
+
+/**
+ * Supported cloning modes.
+ * - "structured": Uses the 'structuredClone' method if available otherwise performs a "deep" clone.
+ * - "deep": Performs a recursive deep clone of the object.
+ * - "none": No cloning. Uses the value as given.
+ */
+export type CloneMode = "structured" | "deep" | "none";
+
+export interface UpdateOptions {
+  /** Specifies whether to deep clone values to persist in the internal store. @default "none". */
+  readonly cloneMode?: CloneMode;
+  /** Options to use for processing queries. Unless overriden 'useStrictMode' is false.  */
+  readonly queryOptions?: Partial<Options>;
 }
 
 /**
@@ -222,38 +236,38 @@ export enum OperatorType {
   PIPELINE = "pipeline",
   PROJECTION = "projection",
   QUERY = "query",
-  WINDOW = "window",
+  WINDOW = "window"
 }
 
 export type AccumulatorOperator = (
-  collection: RawArray,
+  collection: RawObject[],
   expr: AnyVal,
   options?: Options
 ) => AnyVal;
 
 export type ExpressionOperator = (
-  obj: AnyVal,
-  expr: AnyVal,
-  options?: ComputeOptions
+  obj: RawObject,
+  expr: AnyVal | RawObject | RawArray,
+  options: Options
 ) => AnyVal;
 
 export type PipelineOperator = (
   collection: Iterator,
   expr: AnyVal,
-  options?: Options
+  options: Options
 ) => Iterator;
 
 export type ProjectionOperator = (
   obj: RawObject,
   expr: AnyVal,
   selector: string,
-  options?: Options
+  options: Options
 ) => AnyVal;
 
 export type QueryOperator = (
   selector: string,
   value: AnyVal,
-  options?: Options
+  options: Options
 ) => (obj: RawObject) => boolean;
 
 export type WindowOperator = (
@@ -265,7 +279,7 @@ export type WindowOperator = (
     documentNumber: number;
     field: string;
   },
-  options?: Options
+  options: Options
 ) => AnyVal;
 
 type Operator =
@@ -277,7 +291,7 @@ type Operator =
   | WindowOperator;
 
 /** Map of operator functions */
-type OperatorMap = Record<string, Operator>;
+export type OperatorMap = Record<string, Operator>;
 
 // operator definitions
 const OPERATORS: Record<OperatorType, OperatorMap> = {
@@ -286,7 +300,7 @@ const OPERATORS: Record<OperatorType, OperatorMap> = {
   [OperatorType.PIPELINE]: {},
   [OperatorType.PROJECTION]: {},
   [OperatorType.QUERY]: {},
-  [OperatorType.WINDOW]: {},
+  [OperatorType.WINDOW]: {}
 };
 
 /**
@@ -298,7 +312,7 @@ const OPERATORS: Record<OperatorType, OperatorMap> = {
 export function useOperators(type: OperatorType, operators: OperatorMap): void {
   for (const [name, fn] of Object.entries(operators)) {
     assert(
-      fn instanceof Function && isOperator(name),
+      isFunction(fn) && isOperator(name),
       `'${name}' is not a valid operator`
     );
     const currentFn = getOperator(type, name);
@@ -312,14 +326,11 @@ export function useOperators(type: OperatorType, operators: OperatorMap): void {
 }
 
 /**
- * Returns the operator function or null if it is not found
+ * Returns the operator function or undefined if it is not found
  * @param type Type of operator
  * @param operator Name of the operator
  */
-export function getOperator(
-  type: OperatorType,
-  operator: string
-): Callback<AnyVal> | null {
+export function getOperator(type: OperatorType, operator: string): Callback {
   return OPERATORS[type][operator];
 }
 
@@ -329,7 +340,7 @@ export function getOperator(
  * Implementation of system variables
  * @type {Object}
  */
-const systemVariables: Record<string, Callback<AnyVal>> = {
+const systemVariables: Record<string, typeof redact> = {
   $$ROOT(obj: AnyVal, expr: AnyVal, options: ComputeOptions) {
     return options.root;
   },
@@ -341,7 +352,7 @@ const systemVariables: Record<string, Callback<AnyVal>> = {
   },
   $$NOW(obj: AnyVal, expr: AnyVal, options: ComputeOptions) {
     return new Date(options.timestamp);
-  },
+  }
 };
 
 /**
@@ -351,14 +362,14 @@ const systemVariables: Record<string, Callback<AnyVal>> = {
  *
  * @type {Object}
  */
-const redactVariables: Record<string, Callback<AnyVal>> = {
-  $$KEEP(obj: AnyVal, expr: AnyVal, options?: ComputeOptions): AnyVal {
+const redactVariables: Record<string, typeof redact> = {
+  $$KEEP(obj: AnyVal, expr: AnyVal, options: ComputeOptions): AnyVal {
     return obj;
   },
-  $$PRUNE(obj: AnyVal, expr: AnyVal, options?: ComputeOptions): AnyVal {
+  $$PRUNE(obj: AnyVal, expr: AnyVal, options: ComputeOptions): AnyVal {
     return undefined;
   },
-  $$DESCEND(obj: AnyVal, expr: AnyVal, options?: ComputeOptions): AnyVal {
+  $$DESCEND(obj: RawObject, expr: AnyVal, options: ComputeOptions): AnyVal {
     // traverse nested documents iff there is a $cond
     if (!has(expr as RawObject, "$cond")) return obj;
 
@@ -393,7 +404,7 @@ const redactVariables: Record<string, Callback<AnyVal>> = {
       }
     }
     return obj;
-  },
+  }
 };
 /* eslint-enable unused-imports/no-unused-vars-ts */
 
@@ -409,25 +420,20 @@ const redactVariables: Record<string, Callback<AnyVal>> = {
 export function computeValue(
   obj: AnyVal,
   expr: AnyVal,
-  operator?: string,
+  operator: string | null,
   options?: Options
 ): AnyVal {
   // ensure valid options exist on first invocation
   const copts = ComputeOptions.init(options, obj);
+  operator = operator || "";
 
   if (isOperator(operator)) {
     // if the field of the object is a valid operator
-    const callExpression = getOperator(
-      OperatorType.EXPRESSION,
-      operator
-    ) as ExpressionOperator;
-    if (callExpression) return callExpression(obj, expr, copts);
+    const callExpression = getOperator(OperatorType.EXPRESSION, operator);
+    if (callExpression) return callExpression(obj as RawObject, expr, copts);
 
     // we also handle $group accumulator operators
-    const callAccumulator = getOperator(
-      OperatorType.ACCUMULATOR,
-      operator
-    ) as AccumulatorOperator;
+    const callAccumulator = getOperator(OperatorType.ACCUMULATOR, operator);
     if (callAccumulator) {
       // if object is not an array, first try to compute using the expression
       if (!(obj instanceof Array)) {
@@ -440,7 +446,7 @@ export function computeValue(
 
       // for accumulators, we use the global options since the root is specific to each element within array.
       return callAccumulator(
-        obj as RawArray,
+        obj as RawObject[],
         expr,
         // reset the root object for accumulators.
         copts.update(null, copts.local)
@@ -470,7 +476,11 @@ export function computeValue(
     if (has(systemVariables, arr[0])) {
       // set 'root' only the first time it is required to be used for all subsequent calls
       // if it already available on the options, it will be used
-      context = systemVariables[arr[0]](obj, null, copts) as ArrayOrObject;
+      context = systemVariables[arr[0]](
+        obj as RawObject,
+        null,
+        copts
+      ) as ArrayOrObject;
       expr = expr.slice(arr[0].length + 1); //  +1 for '.'
     } else if (arr[0].slice(0, 2) === "$$") {
       // handle user-defined variables
@@ -498,10 +508,8 @@ export function computeValue(
   }
 
   // check and return value if already in a resolved state
-  if (expr instanceof Array) {
-    return (expr as RawArray).map((item: AnyVal) =>
-      computeValue(obj, item, null, copts)
-    );
+  if (isArray(expr)) {
+    return expr.map((item: AnyVal) => computeValue(obj, item, null, copts));
   } else if (isObject(expr)) {
     const result: RawObject = {};
     for (const [key, val] of Object.entries(expr as RawObject)) {
@@ -509,7 +517,7 @@ export function computeValue(
       // must run ONLY one aggregate operator per expression
       // if so, return result of the computed value
       if (
-        [OperatorType.EXPRESSION, OperatorType.ACCUMULATOR].some((c) =>
+        [OperatorType.EXPRESSION, OperatorType.ACCUMULATOR].some(c =>
           has(OPERATORS[c], key)
         )
       ) {

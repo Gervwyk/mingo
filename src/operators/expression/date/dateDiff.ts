@@ -1,8 +1,8 @@
 // Date Expression Operators: https://docs.mongodb.com/manual/reference/operator/aggregation/#date-expression-operators
 
 import { computeValue, Options } from "../../../core";
-import { AnyVal, RawObject } from "../../../types";
-import { computeDate, Duration, DURATION_IN_MILLIS } from "./_internal";
+import { AnyVal, Duration, RawObject } from "../../../types";
+import { computeDate, DURATION_IN_MILLIS } from "./_internal";
 
 /**
  * Returns the difference between two dates.
@@ -13,7 +13,7 @@ import { computeDate, Duration, DURATION_IN_MILLIS } from "./_internal";
 export function $dateDiff(
   obj: RawObject,
   expr: RawObject,
-  options?: Options
+  options: Options
 ): AnyVal {
   const args = computeValue(obj, expr, null, options) as {
     startDate: AnyVal;
@@ -43,7 +43,7 @@ export function $dateDiff(
 const unitMonths = {
   year: 12,
   quarter: 3,
-  month: 1,
+  month: 1
 };
 
 function diffYQM(d1: Date, d2: Date, unit: string): number {

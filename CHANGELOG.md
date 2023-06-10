@@ -1,5 +1,55 @@
 # Changelog
 
+## 6.4.1 / 2023-06-08
+**New**
+- Add options support for `updateObject`.
+- Add `createUpdater` for creating updater functions with default options.
+- Default to no cloning of inputs to update operators.
+- Provide clone method configuration via `cloneMode` option.
+
+## 6.4.0 / 2023-06-06
+**New**
+- Added support for update operators accessible via `updateObject` from `mingo/updater`. Includes;
+  - Field Update Operators: `$currentDate`, `$inc`, `$max`, `$min`, `$mul`, `$set`, `$unset`, `$rename`.
+  - Array Update Operators: `$[]`, `$[<identifier>]`, `$addToSet`, `$pop`, `$push`, `$pull`, `$pushAll`.
+  - Bitwise Update Operators: `$bit`.
+
+## 6.3.4 / 2023-05-26
+**Fixes**
+- Fixed hash collision resolution for `$sort` and `$group`. Closes [332](https://github.com/kofrasa/mingo/issues/332).
+- Support MongoDB compatibility truth check for `$where` operator.
+
+**Minor**
+- Export `walk` util function.
+- Flatten module exports to expose only `index` roots.
+- Update dependencies.
+
+## 6.3.3 / 2023-05-26 (deprecated)
+* Deprecated due to invalid operator imports.
+
+## 6.3.2 / 2023-03-29
+**Fixes**
+- Coerce empty string `""` to `true` for applicable operators when using strict MongoDB compatibility mode. [321](https://github.com/kofrasa/mingo/issues/321)
+
+## 6.3.1 / 2023-03-28
+**Fixes**
+- Fix `$filter` to properly handle truthy values. [320](https://github.com/kofrasa/mingo/issues/320)
+- Fix `$arrayToObject` to flatten array before converting to objects.
+
+## 6.3.0 / 2023-03-27
+**Fixes**
+- Fix `$size` predicate failing when applied to undefined array. [313](https://github.com/kofrasa/mingo/issues/313)
+- Fix `$min` and `$max` operators to consider type sorting order.
+- Fix `$group` operator to enforce `_id` in spec.
+- Fix variable propagation from parent to child expressions. [315](https://github.com/kofrasa/mingo/issues/315)
+- Fix missing validations for `$setWindowFields` operator.
+
+**New**
+- Add support for `$locf` window operator.
+- Add support for `$linearFill` window operator.
+- Add support for `$fill` pipeline operator.
+
+
 ## 6.2.7 / 2023-01-12
 
 **Fixes**

@@ -10,12 +10,15 @@ import { assert, has, isArray, isObject } from "../../../util";
 export function $arrayToObject(
   obj: RawObject,
   expr: AnyVal,
-  options?: Options
+  options: Options
 ): RawObject {
   const arr = computeValue(obj, expr, null, options) as Array<RawArray>;
   assert(isArray(arr), "$arrayToObject expression must resolve to an array");
 
   return arr.reduce((newObj: RawObject, val: AnyVal) => {
+    // flatten
+    while (isArray(val) && val.length === 1) val = val[0];
+
     if (val instanceof Array && val.length == 2) {
       newObj[val[0] as string] = val[1];
     } else {

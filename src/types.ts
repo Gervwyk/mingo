@@ -9,14 +9,16 @@ export interface Callback<R = AnyVal, T = AnyVal> {
 }
 
 // Generic predicate
-export interface Predicate<T> {
+export interface Predicate<T = AnyVal> {
   (...args: T[]): boolean;
 }
 
 // Generic comparator callback
-export interface Comparator<T> {
+export interface Comparator<T = AnyVal> {
   (left: T, right: T): number;
 }
+
+export type GroupByOutput = Map<AnyVal, Array<AnyVal>>;
 
 /**
  * Custom function to hash values to improve faster comparaisons
@@ -49,3 +51,15 @@ export type BsonType =
   | "double"
   | "decimal"
   | "regex";
+
+/** Duration for datetime periods */
+export type Duration =
+  | "year"
+  | "quarter"
+  | "month"
+  | "week"
+  | "day"
+  | "hour"
+  | "minute"
+  | "second"
+  | "millisecond";

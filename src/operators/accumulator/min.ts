@@ -1,5 +1,6 @@
 import { Options } from "../../core";
 import { AnyVal, RawObject } from "../../types";
+import { compare, isNotNaN } from "../../util";
 import { $push } from "./push";
 
 /**
@@ -13,9 +14,9 @@ import { $push } from "./push";
 export function $min(
   collection: RawObject[],
   expr: AnyVal,
-  options?: Options
+  options: Options
 ): AnyVal {
-  const nums = $push(collection, expr, options) as number[];
-  const n = nums.reduce((acc, n) => (n < acc ? n : acc), Infinity);
+  const nums = $push(collection, expr, options).filter(isNotNaN) as number[];
+  const n = nums.reduce((acc, n) => (compare(n, acc) <= 0 ? n : acc), Infinity);
   return n === Infinity ? undefined : n;
 }

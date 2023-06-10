@@ -7,10 +7,11 @@ import {
   ArrayOrObject,
   Callback,
   Comparator,
+  GroupByOutput,
   HashFunction,
   JsType,
   RawArray,
-  RawObject,
+  RawObject
 } from "./types";
 
 export const MAX_INT = 2147483647;
@@ -20,6 +21,10 @@ export const MIN_LONG = Number.MIN_SAFE_INTEGER;
 
 // special value to identify missing items. treated differently from undefined
 const MISSING = Symbol("missing");
+
+const OBJECT_PROTOTYPE = Object.getPrototypeOf({}) as AnyVal;
+const OBJECT_TAG = "[object Object]";
+const OBJECT_TYPE_RE = /^\[object ([a-zA-Z0-9]+)\]$/;
 
 /**
  * Uses the simple hash method as described in Effective Java.
@@ -50,7 +55,7 @@ const JS_SIMPLE_TYPES = new Set<JsType>([
   "number",
   "string",
   "date",
-  "regexp",
+  "regexp"
 ]);
 
 /** MongoDB sort comparison order. https://www.mongodb.com/docs/manual/reference/bson-type-comparison-order */
@@ -64,7 +69,7 @@ const SORT_ORDER_BY_TYPE: Record<JsType, number> = {
   boolean: 5,
   date: 6,
   regexp: 7,
-  function: 8,
+  function: 8
 };
 
 /**
@@ -74,119 +79,106 @@ const SORT_ORDER_BY_TYPE: Record<JsType, number> = {
  * @param b The second value
  * @returns {Number}
  */
-export const DEFAULT_COMPARATOR = (a: AnyVal, b: AnyVal): number => {
+export const compare = (a: AnyVal, b: AnyVal): number => {
   if (a === MISSING) a = undefined;
   if (b === MISSING) b = undefined;
-  const u = SORT_ORDER_BY_TYPE[getType(a).toLowerCase() as JsType];
-  const v = SORT_ORDER_BY_TYPE[getType(b).toLowerCase() as JsType];
+  const [u, v] = [a, b].map(
+    n => SORT_ORDER_BY_TYPE[getType(n).toLowerCase() as JsType]
+  );
   if (u !== v) return u - v;
-  if (a < b) return -1;
-  if (a > b) return 1;
+  // number | string | date
+  if (u === 1 || u === 2 || u === 6) {
+    if ((a as number) < (b as number)) return -1;
+    if ((a as number) > (b as number)) return 1;
+    return 0;
+  }
+  // check for equivalence equality
+  if (isEqual(a, b)) return 0;
+  if ((a as number) < (b as number)) return -1;
+  if ((a as number) > (b as number)) return 1;
+  // if we get here we are comparing a type that does not make sense.
   return 0;
 };
-
-const OBJECT_PROTOTYPE = Object.getPrototypeOf({}) as AnyVal;
-const OBJECT_TAG = "[object Object]";
-const OBJECT_TYPE_RE = /^\[object ([a-zA-Z0-9]+)\]$/;
 
 export function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
 }
 
 /**
- * Deep clone an object
+ * Deep clone an object. Value types and immutable objects are returned as is.
  */
-export function cloneDeep(obj: AnyVal): AnyVal {
-  if (obj instanceof Array) return obj.map(cloneDeep);
-  if (obj instanceof Date) return new Date(obj);
-  if (isObject(obj)) return objectMap(obj as RawObject, cloneDeep);
-  return obj;
-}
+export const cloneDeep = (obj: AnyVal): AnyVal => {
+  const m = new Map();
+  const add = (v: AnyVal) => {
+    if (m.has(v)) throw new Error("cycle detected during clone operation.");
+    m.set(v, true);
+  };
+  const clone = (val: AnyVal) => {
+    if (val instanceof Date) return new Date(val);
+    if (isArray(val)) {
+      add(val);
+      const res = new Array<AnyVal>(val.length);
+      const len = val.length;
+      for (let i = 0; i < len; i++) res[i] = clone(val[i]);
+      return res;
+    }
+    if (isObject(val)) {
+      add(val);
+      const res = {};
+      for (const k in val) res[k] = clone(val[k]);
+      return res;
+    }
+    return val;
+  };
+  return clone(obj);
+};
 
 /**
  * Returns the name of type as specified in the tag returned by a call to Object.prototype.toString
  * @param v A value
  */
-export function getType(v: AnyVal): string {
-  return OBJECT_TYPE_RE.exec(Object.prototype.toString.call(v) as string)[1];
-}
-export function isBoolean(v: AnyVal): v is boolean {
-  return typeof v === "boolean";
-}
-export function isString(v: AnyVal): v is string {
-  return typeof v === "string";
-}
-export function isNumber(v: AnyVal): v is number {
-  return !isNaN(v as number) && typeof v === "number";
-}
+export const getType = (v: AnyVal): string =>
+  OBJECT_TYPE_RE.exec(Object.prototype.toString.call(v) as string)![1];
+export const isBoolean = (v: AnyVal): v is boolean => typeof v === "boolean";
+export const isString = (v: AnyVal): v is string => typeof v === "string";
+export const isNumber = (v: AnyVal): v is number =>
+  !isNaN(v as number) && typeof v === "number";
+export const isNotNaN = (v: AnyVal) =>
+  !(isNaN(v as number) && typeof v === "number");
 export const isArray = Array.isArray;
-export function isObject(v: AnyVal): v is object {
+export const isObject = (v: AnyVal): v is object => {
   if (!v) return false;
   const proto = Object.getPrototypeOf(v) as AnyVal;
   return (
     (proto === OBJECT_PROTOTYPE || proto === null) &&
     OBJECT_TAG === Object.prototype.toString.call(v)
   );
-}
-export function isObjectLike(v: AnyVal): boolean {
-  return v === Object(v);
-} // objects, arrays, functions, date, custom object
-export function isDate(v: AnyVal): v is Date {
-  return v instanceof Date;
-}
-export function isRegExp(v: AnyVal): v is RegExp {
-  return v instanceof RegExp;
-}
-export function isFunction(v: AnyVal): boolean {
-  return typeof v === "function";
-}
-export function isNil(v: AnyVal): boolean {
-  return v === null || v === undefined;
-}
-export function inArray(arr: AnyVal[], item: AnyVal): boolean {
-  return arr.includes(item);
-}
-export function notInArray(arr: RawArray, item: AnyVal): boolean {
-  return !inArray(arr, item);
-}
-export function truthy(arg: AnyVal): boolean {
-  return !!arg;
-}
-export function isEmpty(x: AnyVal): boolean {
-  return (
-    isNil(x) ||
-    (isString(x) && !x) ||
-    (x instanceof Array && x.length === 0) ||
-    (isObject(x) && Object.keys(x).length === 0)
-  );
-}
-export function isMissing(m: AnyVal): boolean {
-  return m === MISSING;
-}
-// ensure a value is an array or wrapped within one
-export function ensureArray(x: AnyVal): RawArray {
-  return x instanceof Array ? x : [x];
-}
-export function has(obj: RawObject, prop: string): boolean {
-  return !!obj && (Object.prototype.hasOwnProperty.call(obj, prop) as boolean);
-}
+};
+//  objects, arrays, functions, date, custom object
+export const isObjectLike = (v: AnyVal): boolean => v === Object(v);
+export const isDate = (v: AnyVal): v is Date => v instanceof Date;
+export const isRegExp = (v: AnyVal): v is RegExp => v instanceof RegExp;
+export const isFunction = (v: AnyVal): boolean => typeof v === "function";
+export const isNil = (v: AnyVal): boolean => v === null || v === undefined;
+export const inArray = (arr: AnyVal[], item: AnyVal): boolean =>
+  arr.includes(item);
+export const notInArray = (arr: RawArray, item: AnyVal): boolean =>
+  !inArray(arr, item);
+export const truthy = (arg: AnyVal, strict = true): boolean =>
+  !!arg || (strict && arg === "");
+export const isEmpty = (x: AnyVal): boolean =>
+  isNil(x) ||
+  (isString(x) && !x) ||
+  (x instanceof Array && x.length === 0) ||
+  (isObject(x) && Object.keys(x).length === 0);
 
-/**
- * Transform values in an object
- *
- * @param  {Object}   obj   An object whose values to transform
- * @param  {Function} fn The transform function
- * @return {Array|Object} Result object after applying the transform
- */
-export function objectMap(obj: RawObject, fn: Callback<AnyVal>): RawObject {
-  const o = {};
-  const objKeys = Object.keys(obj);
-  for (let i = 0; i < objKeys.length; i++) {
-    const k = objKeys[i];
-    o[k] = fn(obj[k], k);
-  }
-  return o;
-}
+export const isMissing = (v: AnyVal): boolean => v === MISSING;
+/** ensure a value is an array or wrapped within one. */
+export const ensureArray = (x: AnyVal): RawArray =>
+  x instanceof Array ? x : [x];
+
+export const has = (obj: RawObject, prop: string): boolean =>
+  !!obj && (Object.prototype.hasOwnProperty.call(obj, prop) as boolean);
 
 /** Options to merge function */
 interface MergeOptions {
@@ -236,7 +228,7 @@ export function merge(
       into(result, input);
     }
   } else {
-    Object.keys(obj).forEach((k) => {
+    Object.keys(obj).forEach(k => {
       if (has(obj as RawObject, k)) {
         if (has(target, k)) {
           target[k] = merge(
@@ -254,156 +246,126 @@ export function merge(
   return target;
 }
 
-// A tree to support O(logN) search
-interface BNode {
-  left?: BNode;
-  right?: BNode;
-  readonly key: string;
-  readonly indexes: number[];
-}
-
-function addIndex(root: BNode, key: string, index: number) {
-  if (root.key < key) {
-    if (root.right) {
-      addIndex(root.right, key, index);
+function buildHashIndex(
+  arr: RawArray,
+  hashFunction: HashFunction = DEFAULT_HASH_FUNCTION
+): Map<string, number[]> {
+  const map = new Map<string, number[]>();
+  arr.forEach((o, i) => {
+    const h = hashCode(o, hashFunction);
+    if (map.has(h)) {
+      if (!map.get(h).some(j => isEqual(arr[j], o))) {
+        map.get(h).push(i);
+      }
     } else {
-      root.right = { key, indexes: [index] } as BNode;
+      map.set(h, [i]);
     }
-  } else if (root.key > key) {
-    if (root.left) {
-      addIndex(root.left, key, index);
-    } else {
-      root.left = { key, indexes: [index] } as BNode;
-    }
-  } else {
-    root.indexes.push(index);
-  }
-}
-
-function getIndexes(root: BNode, key: string): number[] | undefined {
-  if (root.key == key) {
-    return root.indexes;
-  } else if (root.key < key) {
-    return root.right ? getIndexes(root.right, key) : undefined;
-  } else if (root.key > key) {
-    return root.left ? getIndexes(root.left, key) : undefined;
-  }
-  return undefined;
+  });
+  return map;
 }
 
 /**
  * Returns the intersection of multiple arrays.
  *
- * @param  {Array} a The first array
- * @param  {Array} b The second array
+ * @param  {Array} input An array of arrays from which to find intersection.
  * @param  {Function} hashFunction Custom function to hash values, default the hashCode method
- * @return {Array}    Result array
+ * @return {Array} Array of intersecting values.
  */
 export function intersection(
   input: RawArray[],
   hashFunction: HashFunction = DEFAULT_HASH_FUNCTION
 ): RawArray {
   // if any array is empty, there is no intersection
-  if (input.some((arr) => arr.length == 0)) return [];
+  if (input.some(arr => arr.length == 0)) return [];
+  if (input.length === 1) return Array.from(input);
 
-  // sort input arrays by size
-  const sortedIndex = input.map((a, i) => [i, a.length]);
-  sortedIndex.sort((a, b) => a[1] - b[1]);
+  // sort input arrays by to get smallest array
+  // const sorted = sortBy(input, (a: RawArray) => a.length) as RawArray[];
+  const sortedIndex = sortBy(
+    input.map((a, i) => [i, a.length]),
+    (a: [number, number]) => a[1]
+  ) as Array<[number, number]>;
+  // get the smallest
+  const smallest = input[sortedIndex[0][0]];
+  // get hash index of smallest array
+  const map = buildHashIndex(smallest, hashFunction);
+  // hashIndex for remaining arrays.
+  const rmap = new Map<number, Map<string, number[]>>();
+  // final intersection results and index of first occurrence.
+  const results = new Array<[AnyVal, [number, number]]>();
+  map.forEach((v, k) => {
+    const lhs = v.map(j => smallest[j]);
+    const res = lhs.map(_ => 0);
+    // used to track first occurence of value in order of the original input array.
+    const stable = lhs.map(_ => [sortedIndex[0][0], 0]);
+    let found = false;
+    for (let i = 1; i < input.length; i++) {
+      const [currIndex, _] = sortedIndex[i];
+      const arr = input[currIndex];
+      if (!rmap.has(i)) rmap.set(i, buildHashIndex(arr));
+      // we found a match. let's confirm.
+      if (rmap.get(i).has(k)) {
+        const rhs = rmap
+          .get(i)
+          .get(k)
+          .map(j => arr[j]);
 
-  // matched items index of first array for all other arrays.
-  const result: Array<Record<number, boolean>> = [];
-
-  const smallestArray = input[sortedIndex[0][0]];
-  const root: BNode = {
-    key: hashCode(smallestArray[0], hashFunction),
-    indexes: [0],
-  };
-
-  for (let i = 1; i < smallestArray.length; i++) {
-    const val = smallestArray[i];
-    const h = hashCode(val, hashFunction);
-    addIndex(root, h, i);
-  }
-
-  let maxResultSize = sortedIndex[0][1];
-  const orderedIndexes: number[] = [];
-
-  for (let i = 1; i < sortedIndex.length; i++) {
-    const arrayIndex = sortedIndex[i][0];
-    const data = input[arrayIndex];
-
-    // number of matched items
-    let size = 0;
-    for (let j = 0; j < data.length; j++) {
-      const h = hashCode(data[j], hashFunction);
-      const indexes = getIndexes(root, h);
-
-      // not included.
-      if (!indexes) continue;
-
-      // check items equality to mitigate hash collisions and select the matching index.
-      const idx = indexes
-        .map((n) => smallestArray[n])
-        .findIndex((v) => isEqual(v, data[j]));
-
-      // not included
-      if (idx == -1) continue;
-
-      // item matched. ensure map exist for marking index
-      if (result.length < i) result.push({});
-
-      // map to index of the actual value and set position
-      result[result.length - 1][indexes[idx]] = true;
-
-      // if we have seen max result items we can stop.
-      size = Object.keys(result[result.length - 1]).length;
-
-      // ensure stabilty
-      if (arrayIndex == 0) {
-        if (orderedIndexes.indexOf(indexes[idx]) == -1) {
-          orderedIndexes.push(indexes[idx]);
-        }
+        // confirm the intersection with an equivalence check.
+        found = lhs
+          .map((s, n) =>
+            rhs.some((t, m) => {
+              // we expect only one to match here since these are just collisions.
+              const p = res[n];
+              if (isEqual(s, t)) {
+                res[n]++;
+                // track position of value ordering for stability.
+                if (currIndex < stable[n][0]) {
+                  stable[n] = [currIndex, rmap.get(i).get(k)[m]];
+                }
+              }
+              return p < res[n];
+            })
+          )
+          .some(Boolean);
       }
+
+      // found nothing, so exclude value. this was just a hash collision.
+      if (!found) return;
     }
-    // no intersection if nothing found
-    if (size == 0) return [];
 
-    // new max result size
-    maxResultSize = Math.min(maxResultSize, size);
-  }
-
-  const freq: Record<number, number> = {};
-
-  // count occurrences
-  result.forEach((m) => {
-    Object.keys(m).forEach((k) => {
-      const n = parseFloat(k);
-      freq[n] = freq[n] || 0;
-      freq[n]++;
-    });
+    // extract value into result if we found an intersection.
+    // we find an intersection if the frequency counter matches the count of the remaining arrays.
+    if (found) {
+      into(
+        results,
+        res
+          .map((n, i) => {
+            return n === input.length - 1 ? [lhs[i], stable[i]] : MISSING;
+          })
+          .filter(n => n !== MISSING)
+      );
+    }
   });
 
-  const keys = orderedIndexes;
-
-  if (keys.length == 0) {
-    // note: cannot use parseInt due to second argument for radix.
-    keys.push(...Object.keys(freq).map(parseFloat));
-    keys.sort();
-  }
-
-  return keys
-    .filter((n) => freq[n] == input.length - 1)
-    .map((n) => smallestArray[n]);
+  return results
+    .sort((a, b) => {
+      const [_i, [u, m]] = a;
+      const [_j, [v, n]] = b;
+      const r = compare(u, v);
+      if (r !== 0) return r;
+      return compare(m, n);
+    })
+    .map(v => v[0]);
 }
 
 /**
  * Flatten the array
  *
- * @param  {Array} xs The array to flatten
+ * @param {Array} xs The array to flatten
  * @param {Number} depth The number of nested lists to iterate
  */
-export function flatten(xs: RawArray, depth: number): RawArray {
-  const arr = [];
+export function flatten(xs: RawArray, depth = 0): RawArray {
+  const arr = new Array<AnyVal>();
   function flatten2(ys: RawArray, n: number) {
     for (let i = 0, len = ys.length; i < len; i++) {
       if (isArray(ys[i]) && (n > 0 || n < 0)) {
@@ -451,8 +413,8 @@ export function isEqual(a: AnyVal, b: AnyVal): boolean {
       into(rhs, ys);
     } else if (nativeType === "object") {
       // deep compare objects
-      const aKeys = Object.keys(a);
-      const bKeys = Object.keys(b);
+      const aKeys = Object.keys(a as RawObject);
+      const bKeys = Object.keys(b as RawObject);
 
       // check length of keys early
       if (aKeys.length !== bKeys.length) return false;
@@ -463,8 +425,8 @@ export function isEqual(a: AnyVal, b: AnyVal): boolean {
         // not found
         if (!has(b as RawObject, k)) return false;
         // key found
-        lhs.push(a[k]);
-        rhs.push(b[k]);
+        lhs.push((a as RawObject)[k]);
+        rhs.push((b as RawObject)[k]);
       }
     } else {
       // compare encoded values
@@ -476,62 +438,18 @@ export function isEqual(a: AnyVal, b: AnyVal): boolean {
 
 /**
  * Return a new unique version of the collection
- * @param  {Array} xs The input collection
+ * @param  {Array} input The input collection
  * @return {Array}
  */
 export function unique(
-  xs: RawArray,
+  input: RawArray,
   hashFunction: HashFunction = DEFAULT_HASH_FUNCTION
 ): RawArray {
-  if (xs.length == 0) return [];
-
-  const root: BNode = {
-    key: hashCode(xs[0], hashFunction),
-    indexes: [0],
-  };
-
-  // hash items on to tree to track collisions
-  for (let i = 1; i < xs.length; i++) {
-    addIndex(root, hashCode(xs[i], hashFunction), i);
-  }
-
-  const result: number[] = [];
-
-  // walk tree and remove duplicates
-  const stack = [root];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node.indexes.length == 1) {
-      result.push(node.indexes[0]);
-    } else {
-      // handle collisions by matching all items
-      const arr = node.indexes;
-      // we start by search from the back so we maintain the smaller index when there is a duplicate.
-      while (arr.length > 0) {
-        for (let j = 1; j < arr.length; j++) {
-          // if last item matches any remove the last item.
-          if (isEqual(xs[arr[arr.length - 1]], xs[arr[arr.length - 1 - j]])) {
-            // remove last item
-            arr.pop();
-            // reset position
-            j = 0;
-          }
-        }
-        // add the unique item
-        result.push(arr.pop());
-      }
-    }
-
-    // add children
-    if (node.left) stack.push(node.left);
-    if (node.right) stack.push(node.right);
-  }
-
-  // sort indexes for stability
-  result.sort();
-
-  // return the unique items
-  return result.map((i) => xs[i]);
+  const result: RawArray = input.map(_ => MISSING);
+  buildHashIndex(input, hashFunction).forEach((v, _) => {
+    v.forEach(i => (result[i] = input[i]));
+  });
+  return result.filter(v => v !== MISSING);
 }
 
 /**
@@ -546,7 +464,7 @@ export function stringify(value: AnyVal): string {
     case "boolean":
     case "number":
     case "regexp":
-      return value.toString();
+      return (value as string).toString();
     case "string":
       return JSON.stringify(value);
     case "date":
@@ -561,11 +479,13 @@ export function stringify(value: AnyVal): string {
   }
   // default case
   const prefix = type === "object" ? "" : `${getType(value)}`;
-  const objKeys = Object.keys(value);
+  const objKeys = Object.keys(value as RawObject);
   objKeys.sort();
   return (
     `${prefix}{` +
-    objKeys.map((k) => `${stringify(k)}:${stringify(value[k])}`).join(",") +
+    objKeys
+      .map(k => `${stringify(k)}:${stringify((value as RawObject)[k])}`)
+      .join(",") +
     "}"
   );
 }
@@ -580,8 +500,9 @@ export function stringify(value: AnyVal): string {
  */
 export function hashCode(
   value: AnyVal,
-  hashFunction: HashFunction = DEFAULT_HASH_FUNCTION
+  hashFunction?: HashFunction
 ): string | null {
+  hashFunction = hashFunction || DEFAULT_HASH_FUNCTION;
   if (isNil(value)) return null;
   return hashFunction(value).toString();
 }
@@ -596,15 +517,16 @@ export function hashCode(
  * @param {Function} comparator The comparator function to use for comparing keys. Defaults to standard comparison via `compare(...)`
  * @return {Array} Returns a new sorted array by the given key and comparator function
  */
-export function sortBy(
+export function sortBy<T = AnyVal>(
   collection: RawArray,
-  keyFn: Callback<AnyVal>,
-  comparator: Comparator<AnyVal> = DEFAULT_COMPARATOR
+  keyFn: Callback<T>,
+  comparator: Comparator<T> = compare
 ): RawArray {
-  const sorted = [];
-  const result = [];
-
   if (isEmpty(collection)) return collection;
+
+  type Pair = [T, AnyVal];
+  const sorted = new Array<Pair>();
+  const result = new Array<AnyVal>();
 
   for (let i = 0; i < collection.length; i++) {
     const obj = collection[i];
@@ -617,9 +539,11 @@ export function sortBy(
   }
 
   // use native array sorting but enforce stableness
-  sorted.sort((a: RawArray, b: RawArray) => comparator(a[0], b[0]));
-  result.push(...sorted.map((o: RawArray) => o[1]));
-  return result;
+  sorted.sort((a, b) => comparator(a[0], b[0]));
+  return into(
+    result,
+    sorted.map((o: RawArray) => o[1])
+  ) as RawArray;
 }
 
 /**
@@ -627,35 +551,53 @@ export function sortBy(
  *
  * @param collection
  * @param keyFn {Function} to compute the group key of an item in the collection
- * @returns {{keys: Array, groups: Array}}
+ * @returns {GroupByOutput}
  */
 export function groupBy(
   collection: RawArray,
   keyFn: Callback<AnyVal>,
   hashFunction: HashFunction = DEFAULT_HASH_FUNCTION
-): { keys: RawArray; groups: RawArray[] } {
-  const result = {
-    keys: new Array<AnyVal>(),
-    groups: new Array<RawArray>(),
-  };
+): GroupByOutput {
+  if (collection.length < 1) return new Map();
 
-  const lookup: Record<string, number> = {};
+  // map of hash to collided values
+  const lookup = new Map<string, Array<AnyVal>>();
+  // map of raw key values to objects.
+  const result = new Map<AnyVal, Array<AnyVal>>();
 
   for (let i = 0; i < collection.length; i++) {
     const obj = collection[i];
     const key = keyFn(obj, i);
     const hash = hashCode(key, hashFunction);
-    let index = -1;
 
-    if (lookup[hash] === undefined) {
-      index = result.keys.length;
-      lookup[hash] = index;
-      result.keys.push(key);
-      result.groups.push([]);
+    if (hash === null) {
+      if (result.has(null)) {
+        result.get(null).push(obj);
+      } else {
+        result.set(null, [obj]);
+      }
+    } else {
+      // find if we can match a hash for which the value is equivalent.
+      // this is used to deal with collisions.
+      const existingKey = lookup.has(hash)
+        ? lookup.get(hash).find(k => isEqual(k, key))
+        : null;
+
+      // collision detected or first time seeing key
+      if (isNil(existingKey)) {
+        // collision detected or first entry so we create a new group.
+        result.set(key, [obj]);
+        // upload the lookup with the collided key
+        if (lookup.has(hash)) {
+          lookup.get(hash).push(key);
+        } else {
+          lookup.set(hash, [key]);
+        }
+      } else {
+        // key exists
+        result.get(existingKey).push(obj);
+      }
     }
-
-    index = lookup[hash];
-    result.groups[index].push(obj);
   }
 
   return result;
@@ -676,19 +618,22 @@ export function into(
   ...rest: Array<ArrayOrObject>
 ): ArrayOrObject {
   if (target instanceof Array) {
-    return rest.reduce((acc, arr: RawArray) => {
-      // push arrary in batches to handle large inputs
-      let i = Math.ceil(arr.length / MAX_ARRAY_PUSH);
-      let begin = 0;
-      while (i-- > 0) {
-        Array.prototype.push.apply(
-          acc,
-          arr.slice(begin, begin + MAX_ARRAY_PUSH)
-        );
-        begin += MAX_ARRAY_PUSH;
-      }
-      return acc;
-    }, target);
+    return rest.reduce(
+      ((acc, arr: RawArray) => {
+        // push arrary in batches to handle large inputs
+        let i = Math.ceil(arr.length / MAX_ARRAY_PUSH);
+        let begin = 0;
+        while (i-- > 0) {
+          Array.prototype.push.apply(
+            acc,
+            arr.slice(begin, begin + MAX_ARRAY_PUSH)
+          );
+          begin += MAX_ARRAY_PUSH;
+        }
+        return acc;
+      }) as Callback<typeof target>,
+      target
+    );
   } else {
     // merge objects. same behaviour as Object.assign
     return rest.filter(isObjectLike).reduce((acc, item) => {
@@ -712,7 +657,7 @@ export function memoize(
 ): Callback<AnyVal> {
   return ((memo: RawObject) => {
     return (...args: RawArray): AnyVal => {
-      const key = hashCode(args, hashFunction);
+      const key = hashCode(args, hashFunction) || "";
       if (!has(memo, key)) {
         memo[key] = fn.apply(this, args) as AnyVal;
       }
@@ -810,7 +755,7 @@ export function resolveGraph(
   obj: ArrayOrObject,
   selector: string,
   options?: ResolveOptions
-): ArrayOrObject {
+): ArrayOrObject | undefined {
   const names: string[] = selector.split(".");
   const key = names[0];
   // get the next part of the selector
@@ -848,7 +793,7 @@ export function resolveGraph(
     }
     if (value === undefined) return undefined;
     result = options?.preserveKeys ? { ...obj } : {};
-    result[key] = value;
+    (result as RawObject)[key] = value;
   }
 
   return result as ArrayOrObject;
@@ -882,28 +827,31 @@ interface WalkOptions {
   descendArray?: boolean;
 }
 
+const NUMBER_RE = /^\d+$/;
+
 /**
  * Walk the object graph and execute the given transform function
  *
- * @param  {Object|Array} obj   The object to traverse
- * @param  {String} selector    The selector
- * @param  {Function} fn Function to execute for value at the end the traversal
+ * @param  {Object|Array} obj   The object to traverse.
+ * @param  {String} selector    The selector to navigate.
+ * @param  {Callback} fn Callback to execute for value at the end the traversal.
+ * @param  {WalkOptions} Options to use for the function.
  * @return {*}
  */
-function walk(
+export function walk(
   obj: ArrayOrObject,
   selector: string,
   fn: Callback<void>,
   options?: WalkOptions
 ): void {
-  if (isNil(obj)) return;
-
   const names = selector.split(".");
   const key = names[0];
   const next = names.slice(1).join(".");
 
   if (names.length === 1) {
-    fn(obj, key);
+    if (isObject(obj) || (isArray(obj) && NUMBER_RE.test(key))) {
+      fn(obj, key);
+    }
   } else {
     // force the rest of the graph while traversing
     if (options?.buildGraph && isNil(obj[key])) {
@@ -912,8 +860,10 @@ function walk(
 
     // get the next item
     const item = obj[key] as ArrayOrObject;
+    // nothing more to do
+    if (!item) return;
     // we peek to see if next key is an array index.
-    const isNextArrayIndex = !!(names.length > 1 && names[1].match(/^\d+$/));
+    const isNextArrayIndex = !!(names.length > 1 && NUMBER_RE.test(names[1]));
     // if we have an array value but the next key is not an index and the 'descendArray' option is set,
     // we walk each item in the array separately. This allows for handling traversing keys for objects
     // nested within an array.
@@ -922,7 +872,8 @@ function walk(
     //  - individual objecs can be traversed with "array.k"
     //  - a specific object can be traversed with "array.1"
     if (item instanceof Array && options?.descendArray && !isNextArrayIndex) {
-      item.forEach((e: ArrayOrObject) => walk(e, next, fn, options));
+      item.forEach(((e: ArrayOrObject) =>
+        walk(e, next, fn, options)) as Callback<void>);
     } else {
       walk(item, next, fn, options);
     }
@@ -944,9 +895,9 @@ export function setValue(
   walk(
     obj,
     selector,
-    (item: RawObject, key: string) => {
+    ((item: RawObject, key: string) => {
       item[key] = value;
-    },
+    }) as Callback<void>,
     { buildGraph: true }
   );
 }
@@ -967,7 +918,7 @@ export function removeValue(
   walk(
     obj,
     selector,
-    (item: AnyVal, key: string) => {
+    ((item: AnyVal, key: string) => {
       if (item instanceof Array) {
         if (/^\d+$/.test(key)) {
           item.splice(parseInt(key), 1);
@@ -981,7 +932,7 @@ export function removeValue(
       } else if (isObject(item)) {
         delete item[key];
       }
-    },
+    }) as Callback<void>,
     options
   );
 }
@@ -1009,8 +960,9 @@ export function normalize(expr: AnyVal): AnyVal {
 
   // normalize object expression. using ObjectLike handles custom types
   if (isObjectLike(expr)) {
+    const exprObj = expr as RawObject;
     // no valid query operator found, so we do simple comparison
-    if (!Object.keys(expr).some(isOperator)) {
+    if (!Object.keys(exprObj).some(isOperator)) {
       return { $eq: expr };
     }
 
@@ -1018,9 +970,9 @@ export function normalize(expr: AnyVal): AnyVal {
     if (has(expr as RawObject, "$regex")) {
       return {
         $regex: new RegExp(
-          expr["$regex"] as string,
-          expr["$options"] as string
-        ),
+          exprObj["$regex"] as string,
+          exprObj["$options"] as string
+        )
       };
     }
   }

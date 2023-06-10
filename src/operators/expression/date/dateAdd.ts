@@ -1,13 +1,12 @@
 // Date Expression Operators: https://docs.mongodb.com/manual/reference/operator/aggregation/#date-expression-operators
 
 import { computeValue, Options } from "../../../core";
-import { AnyVal, RawObject } from "../../../types";
+import { AnyVal, Duration, RawObject } from "../../../types";
 import {
   adjustDate,
   computeDate,
-  Duration,
   DURATION_IN_MILLIS,
-  parseTimezone,
+  parseTimezone
 } from "./_internal";
 
 /**
@@ -18,7 +17,7 @@ import {
 export function $dateAdd(
   obj: RawObject,
   expr: RawObject,
-  options?: Options
+  options: Options
 ): AnyVal {
   const args = computeValue(obj, expr, null, options) as {
     startDate: AnyVal;

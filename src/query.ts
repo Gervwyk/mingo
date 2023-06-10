@@ -1,22 +1,23 @@
 import { getOperator, initOptions, OperatorType, Options } from "./core";
 import { Cursor } from "./cursor";
 import { Source } from "./lazy";
-import { AnyVal, Callback, RawObject } from "./types";
+import { AnyVal, Callback, Predicate, RawObject } from "./types";
 import { assert, inArray, isObject, isOperator, normalize } from "./util";
 
 /**
  * An object used to filter input documents
  *
- * @param {Object} criteria The criteria for constructing predicates
+ * @param {Object} condition The condition for constructing predicates
  * @param {Options} options Options for use by operators
  * @constructor
  */
 export class Query {
   private readonly compiled: Callback<AnyVal>[];
+  private readonly options: Options;
 
   constructor(
-    private readonly criteria: RawObject,
-    private readonly options?: Options
+    private readonly condition: RawObject,
+    options?: Partial<Options>
   ) {
     this.options = initOptions(options);
     this.compiled = [];
@@ -24,13 +25,13 @@ export class Query {
   }
 
   private compile(): void {
-    assert(isObject(this.criteria), "query criteria must be an object");
+    assert(isObject(this.condition), "query criteria must be an object");
 
-    let whereOperator: { field: string; expr: AnyVal };
+    const whereOperator: { field?: string; expr?: AnyVal } = {};
 
-    for (const [field, expr] of Object.entries(this.criteria)) {
+    for (const [field, expr] of Object.entries(this.condition)) {
       if ("$where" === field) {
-        whereOperator = { field: field, expr: expr };
+        Object.assign(whereOperator, { field: field, expr: expr });
       } else if (
         inArray(["$and", "$or", "$nor", "$expr", "$jsonSchema"], field)
       ) {
@@ -38,12 +39,14 @@ export class Query {
       } else {
         // normalize expression
         assert(!isOperator(field), `unknown top level operator: ${field}`);
-        for (const [operator, val] of Object.entries(normalize(expr))) {
+        for (const [operator, val] of Object.entries(
+          normalize(expr) as RawObject
+        )) {
           this.processOperator(field, operator, val);
         }
       }
 
-      if (isObject(whereOperator)) {
+      if (whereOperator.field) {
         this.processOperator(
           whereOperator.field,
           whereOperator.field,
@@ -59,7 +62,9 @@ export class Query {
     value: AnyVal
   ): void {
     const call = getOperator(OperatorType.QUERY, operator);
-    assert(!!call, `unknown operator ${operator}`);
+    if (!call) {
+      throw new Error(`unknown operator ${operator}`);
+    }
     const fn = call(field, value, this.options) as Callback<AnyVal>;
     this.compiled.push(fn);
   }
@@ -89,7 +94,7 @@ export class Query {
   find(collection: Source, projection?: RawObject): Cursor {
     return new Cursor(
       collection,
-      (x: RawObject) => this.test(x),
+      ((x: RawObject) => this.test(x)) as Predicate<AnyVal>,
       projection || {},
       this.options
     );

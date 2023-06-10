@@ -1,7 +1,7 @@
 import { ComputeOptions, computeValue, Options } from "../../core";
-import { Iterator } from "../../lazy";
-import { RawArray, RawObject } from "../../types";
-import { groupBy } from "../../util";
+import { Iterator, Source } from "../../lazy";
+import { Callback, RawArray, RawObject } from "../../types";
+import { assert, groupBy, has } from "../../util";
 
 // lookup key for grouping
 const ID_KEY = "_id";
@@ -17,16 +17,17 @@ const ID_KEY = "_id";
 export function $group(
   collection: Iterator,
   expr: RawObject,
-  options?: Options
+  options: Options
 ): Iterator {
+  assert(has(expr, ID_KEY), "a group specification must include an _id");
   const idExpr = expr[ID_KEY];
   const copts = ComputeOptions.init(options);
 
-  return collection.transform((coll: RawArray) => {
+  return collection.transform(((coll: RawArray) => {
     const partitions = groupBy(
       coll,
-      (obj) => computeValue(obj, idExpr, null, options),
-      options?.hashFunction
+      obj => computeValue(obj, idExpr, null, options),
+      options.hashFunction
     );
 
     // remove the group key
@@ -34,12 +35,13 @@ export function $group(
     delete expr[ID_KEY];
 
     let i = -1;
-    const size = partitions.keys.length;
+    const partitionKeys = Array.from(partitions.keys());
+    const size = partitions.size;
 
     return () => {
       if (++i === size) return { done: true };
 
-      const groupId = partitions.keys[i];
+      const groupId = partitionKeys[i];
       const obj: RawObject = {};
 
       // exclude undefined key value
@@ -50,7 +52,7 @@ export function $group(
       // compute remaining keys in expression
       for (const [key, val] of Object.entries(expr)) {
         obj[key] = computeValue(
-          partitions.groups[i],
+          partitions.get(groupId),
           val,
           key,
           copts.update(null, { groupId })
@@ -59,5 +61,5 @@ export function $group(
 
       return { value: obj, done: false };
     };
-  });
+  }) as Callback<Source>);
 }
